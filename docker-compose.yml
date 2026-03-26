@@ -1,0 +1,301 @@
+version: '3.8'
+
+services:
+  # PostgreSQL для всех сервисов
+  postgres:
+    image: postgres:13
+    container_name: ml-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_MULTIPLE_DATABASES: mlflow,airflow,lakefs
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
+    ports:
+      - "5432:5432"
+    networks:
+      - ml-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MLflow Server
+  mlflow:
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    container_name: ml-mlflow
+    ports:
+      - "${MLFLOW_PORT}:5000"
+    environment:
+      MLFLOW_TRACKING_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      MLFLOW_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - ./mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ml-network
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+
+  # Airflow
+  airflow-postgres:
+    image: postgres:13
+    container_name: ml-airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - ./airflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - ml-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U airflow" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow-webserver:
+    image: apache/airflow:2.7.1
+    container_name: ml-airflow-webserver
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    ports:
+      - "${AIRFLOW_PORT}:8080"
+    networks:
+      - ml-network
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin &&
+      airflow webserver
+      "
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    image: apache/airflow:2.7.1
+    container_name: ml-airflow-scheduler
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    networks:
+      - ml-network
+    command: scheduler
+
+  airflow-triggerer:
+    image: apache/airflow:2.7.1
+    container_name: ml-airflow-triggerer
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    networks:
+      - ml-network
+    command: triggerer
+
+  # MinIO для LakeFS
+  minio:
+    image: minio/minio:latest
+    container_name: ml-minio
+    ports:
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./minio_data:/data
+    networks:
+      - ml-network
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # LakeFS
+  lakefs:
+    image: treeverse/lakefs:latest
+    container_name: ml-lakefs
+    ports:
+      - "${LAKEFS_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      # Настройки базы данных - обязательные
+      LAKEFS_DATABASE_TYPE: postgres
+      LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/lakefs?sslmode=disable
+
+      # Настройки аутентификации
+      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: someSecretKey
+
+      # Настройки блокового хранилища
+      LAKEFS_BLOCKSTORE_TYPE: s3
+      LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
+      LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+
+      # Настройки логирования
+      LAKEFS_LOGGING_LEVEL: DEBUG
+
+      # Настройки для первого пользователя (для lakefs >= 0.80.0)
+      LAKEFS_SETUP_USER_NAME: ${LAKEFS_USERNAME}
+      LAKEFS_SETUP_USER_PASSWORD: ${LAKEFS_PASSWORD}
+      LAKEFS_SETUP_USER_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LAKEFS_SETUP_USER_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LAKEFS_SETUP_USER_EMAIL: admin@example.com
+      LAKEFS_SETUP_LAKEFS_SUPERUSER: "true"
+    networks:
+      - ml-network
+    volumes:
+      - ./lakefs_data:/home/lakefs
+    # Просто запускаем lakefs, автоматическая настройка через переменные окружения
+    command: [ "run" ]
+
+  # JupyterHub
+  jupyterhub:
+    build:
+      context: ./jupyterhub
+      dockerfile: Dockerfile
+    container_name: ml-jupyterhub
+    ports:
+      - "${JUPYTER_PORT}:8000"
+    volumes:
+      - ./jupyterhub_data:/srv/jupyterhub/data
+      - ./notebooks:/home/admin
+      - ./jupyterhub/jupyterhub_config.py:/etc/jupyterhub/jupyterhub_config.py:ro
+    networks:
+      - ml-network
+    environment:
+      - JUPYTERHUB_CRYPT_KEY=${AIRFLOW_FERNET_KEY}
+      - JUPYTER_ALLOW_ROOT=1
+    user: root
+    restart: always
+
+
+  # Diabetes Prediction Service
+  diabetes-service:
+    build:
+      context: ./diabetes-service
+      dockerfile: Dockerfile
+    container_name: ml-diabetes-service
+    ports:
+      - "${DIABETES_SERVICE_PORT:-8005}:8000"
+    depends_on:
+      mlflow:
+        condition: service_started
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_TRACKING_INSECURE_TLS=true
+      - MLFLOW_S3_ENDPOINT_URL=http://mlflow:5000
+      - MODEL_PATH=/app/models/diabetes_model.joblib
+      - MODEL_VERSION=${MODEL_VERSION:-2}
+    volumes:
+      - ./diabetes-service/models:/app/models
+      - ./mlflow_artifacts:/mlflow/artifacts:ro
+    networks:
+      - ml-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: always
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: ml-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - ml-network
+    depends_on:
+      - diabetes-service
+    restart: always
+
+  # Grafana для визуализации
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: ml-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards-config:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    networks:
+      - ml-network
+    depends_on:
+      - prometheus
+    restart: always
+
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  ml-network:
+    driver: bridge

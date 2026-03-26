@@ -1,0 +1,66 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'ml-platform'
+
+# Правила алертинга (опционально)
+rule_files:
+  - "alerts.yml"
+
+# Конфигурация сбора метрик
+scrape_configs:
+  # Сбор метрик с самого Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Сбор метрик с diabetes-service
+  - job_name: 'diabetes-service'
+    scrape_interval: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['diabetes-service:8000']
+        labels:
+          service: 'diabetes-prediction'
+          environment: 'production'
+
+  # Сбор метрик с MLflow
+  - job_name: 'mlflow'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['mlflow:5000']
+        labels:
+          service: 'mlflow'
+          environment: 'production'
+
+  # Сбор метрик с JupyterHub
+  - job_name: 'jupyterhub'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['jupyterhub:8000']
+        labels:
+          service: 'jupyterhub'
+          environment: 'production'
+
+  # Сбор метрик с LakeFS
+  - job_name: 'lakefs'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['lakefs:8000']
+        labels:
+          service: 'lakefs'
+          environment: 'production'
+
+  # Сбор метрик с MinIO
+  - job_name: 'minio'
+    scrape_interval: 30s
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ['minio:9000']
+        labels:
+          service: 'minio'
+          environment: 'production'

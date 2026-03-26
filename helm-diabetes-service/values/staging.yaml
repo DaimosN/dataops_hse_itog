@@ -1,0 +1,24 @@
+# Staging значения
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+
+ingress:
+  enabled: true
+  hosts:
+    - host: staging.ml.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+image:
+  tag: staging

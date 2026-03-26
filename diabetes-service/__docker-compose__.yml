@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.8.0rc0
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5000
+      - MLFLOW_HOST=0.0.0.0
+    volumes:
+      - ./mlflow_data:/mlflow_data  # Изменяем путь для базы данных
+      - ./mlflow_artifacts:/mlflow/artifacts  # Отдельный volume для артефактов
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow_data/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --serve-artifacts
+      --artifacts-destination /mlflow/artifacts
+    networks:
+      - ml-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  diabetes-service:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_TRACKING_INSECURE_TLS=true
+      - MLFLOW_S3_ENDPOINT_URL=http://mlflow:5000  # Для artifact serving
+      - MODEL_PATH=/app/models/diabetes_model.joblib  # Явно указываем путь
+    volumes:
+      - ./models:/app/models
+      - ./mlflow_artifacts:/mlflow/artifacts:ro  # Только для чтения
+    networks:
+      - ml-network
+
+networks:
+  ml-network:
+    driver: bridge

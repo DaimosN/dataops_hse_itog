@@ -1,0 +1,18 @@
+apiVersion: v2
+name: diabetes-service
+description: Helm chart for Diabetes Prediction ML Service
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+icon: https://raw.githubusercontent.com/kubernetes/kubernetes/master/logo/logo.png
+keywords:
+  - ml
+  - diabetes
+  - prediction
+  - fastapi
+maintainers:
+  - name: ML Platform Team
+    email: ml@example.com
+home: https://github.com/yourorg/diabetes-service
+sources:
+  - https://github.com/yourorg/diabetes-service

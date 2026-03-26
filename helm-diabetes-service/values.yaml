@@ -1,0 +1,198 @@
+# Общие настройки
+nameOverride: ""
+fullnameOverride: ""
+
+# Настройки образа
+image:
+  repository: your-registry/diabetes-service
+  tag: latest
+  pullPolicy: Always
+
+# Настройки реплик
+replicaCount: 2
+
+# Настройки стратегии обновления
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# Настройки образа для скачивания
+imagePullSecrets: []
+  # - name: regcred
+
+# Настройки проб
+probes:
+  startup:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 2
+  readiness:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 2
+    successThreshold: 1
+  liveness:
+    enabled: true
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    failureThreshold: 3
+    timeoutSeconds: 2
+
+# Ресурсы CPU и Memory
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# Переменные окружения
+env:
+  MLFLOW_TRACKING_URI: "http://mlflow-service.ml-platform.svc.cluster.local:5000"
+  MODEL_PATH: "/app/models/diabetes_model.joblib"
+  MODEL_VERSION: "2"
+  PYTHONUNBUFFERED: "1"
+  LOG_LEVEL: "INFO"
+
+# Дополнительные переменные окружения (для секретов)
+extraEnv: []
+  # - name: SECRET_KEY
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: my-secret
+  #       key: secret-key
+
+# Настройки сервиса
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+  name: http
+  annotations: {}
+    # prometheus.io/scrape: "true"
+    # prometheus.io/port: "8000"
+
+# Настройки Ingress
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # nginx.ingress.kubernetes.io/limit-rps: "10"
+  hosts:
+    - host: ml.local
+      paths:
+        - path: /api/v1/predict
+          pathType: Prefix
+        - path: /health
+          pathType: Exact
+        - path: /metrics
+          pathType: Exact
+  tls: []
+  #  - secretName: ml-tls-secret
+  #    hosts:
+  #      - ml.local
+
+# Автоматическое масштабирование
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  # targetRequestsPerSecond: 10
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Container security context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_BIND_SERVICE
+
+# Volumes
+volumes:
+  - name: tmp
+    emptyDir: {}
+
+volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+
+# ConfigMap для модели
+configMap:
+  enabled: false
+  name: diabetes-model-config
+  data:
+    model: |
+      # Здесь будет модель
+      # В реальности модель загружается из другого места
+
+# Service Account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Network Policy
+networkPolicy:
+  enabled: false
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - port: 8000
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 5000
+        - port: 5432
+
+# Лейблы по умолчанию
+labels:
+  app: diabetes-service
+  component: ml-service
+  environment: production
