@@ -1,0 +1,55 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: diabetes-service-ingress
+  namespace: ml-platform
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-rpm: "600"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: ml.example.com
+    http:
+      paths:
+      - path: /api/v1/predict
+        pathType: Prefix
+        backend:
+          service:
+            name: diabetes-service
+            port:
+              number: 8000
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: diabetes-service
+            port:
+              number: 8000
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: diabetes-service
+            port:
+              number: 8000
+      - path: /mlflow/status
+        pathType: Exact
+        backend:
+          service:
+            name: diabetes-service
+            port:
+              number: 8000
+  # TLS конфигурация (опционально)
+  tls:
+  - hosts:
+    - ml.example.com
+    secretName: ml-tls-secret

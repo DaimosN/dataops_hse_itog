@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diabetes-service
+  namespace: ml-platform
+  labels:
+    app: diabetes-service
+    component: ml-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: diabetes-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: diabetes-service
+        component: ml-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: diabetes-service
+        image: your-registry/diabetes-service:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 8000
+          protocol: TCP
+
+        # Переменные окружения
+        env:
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow-service.ml-platform.svc.cluster.local:5000"
+        - name: MODEL_PATH
+          value: "/app/models/diabetes_model.joblib"
+        - name: MODEL_VERSION
+          value: "2"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+
+        # Ресурсы
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+        # Startup Probe - для медленных приложений
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 30
+          timeoutSeconds: 2
+
+        # Readiness Probe - когда под готов принимать трафик
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+          timeoutSeconds: 2
+          successThreshold: 1
+
+        # Liveness Probe - когда под нужно перезапустить
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          failureThreshold: 3
+          timeoutSeconds: 2
+
+        # Монтирование volume для модели
+        volumeMounts:
+        - name: models
+          mountPath: /app/models
+        - name: tmp
+          mountPath: /tmp
+
+      # Volumes
+      volumes:
+      - name: models
+        configMap:
+          name: diabetes-model-config
+          items:
+          - key: model
+            path: diabetes_model.joblib
+      - name: tmp
+        emptyDir: {}
+
+      # Политики безопасности
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      # Распределение по узлам
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - diabetes-service
+              topologyKey: kubernetes.io/hostname
+
+      # Graceful shutdown
+      terminationGracePeriodSeconds: 30
